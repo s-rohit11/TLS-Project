@@ -1,32 +1,57 @@
 """
-TLS 1.2 Demo Connection
+TLS 1.2 Demo Connection (Iteration 2)
 Author: Rohit Saravanan
 
-This script demonstrates how to force a TLS 1.2 connection
-to a server and prints out the negotiated protocol and cipher.
+Enhancements:
+- Extracts TLS protocol and cipher suite.
+- Retrieves certificate details (issuer, subject, expiry).
+- Calculates days until certificate expiration using timezone-aware datetimes.
 """
 
 import socket
 import ssl
+from datetime import datetime, timezone
 
-# Host and port for testing (Google supports both TLS 1.2 and 1.3)
-HOST = "www.google.com"
-PORT = 443
+# Target host/port for TLS test
+hostname = "www.google.com"
+port = 443
 
-def connect_tls12(host: str, port: int = 443):
-    # Create a default SSL context (system CAs, secure defaults)
-    context = ssl.create_default_context()
+# Force TLS 1.2 context
+context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+context.check_hostname = True
+context.verify_mode = ssl.CERT_REQUIRED
+context.load_default_certs()
 
-    # Force TLS version to 1.2 only
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.maximum_version = ssl.TLSVersion.TLSv1_2
+with socket.create_connection((hostname, port)) as sock:
+    with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+        # TLS details
+        protocol_version = ssock.version()
+        cipher = ssock.cipher()
 
-    # Establish TCP connection
-    with socket.create_connection((host, port)) as sock:
-        # Wrap TCP in TLS
-        with context.wrap_socket(sock, server_hostname=host) as ssock:
-            print("✅ Connected using:", ssock.version())   # should say TLSv1.2
-            print("🔒 Cipher suite:", ssock.cipher())
+        # Certificate details
+        cert = ssock.getpeercert()
+        issued_to = dict(x[0] for x in cert.get("subject", ())).get("commonName", "N/A")
+        issued_by = dict(x[0] for x in cert.get("issuer", ())).get("commonName", "N/A")
 
-if __name__ == "__main__":
-    connect_tls12(HOST, PORT)
+        # Handle expiry parsing
+        not_after = cert.get("notAfter", None)
+        if not_after:
+            expiry_date = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
+            expiry_date = expiry_date.replace(tzinfo=timezone.utc)
+            days_left = (expiry_date - datetime.now(timezone.utc)).days
+        else:
+            expiry_date = "Unknown"
+            days_left = "N/A"
+
+        # Output
+        print(f"🔐 Connected to {hostname}:{port}")
+        print(f"   ➤ TLS Protocol: {protocol_version}")
+        print(f"   ➤ Cipher Suite: {cipher}")
+        print(f"   ➤ Certificate Issued To: {issued_to}")
+        print(f"   ➤ Certificate Issued By: {issued_by}")
+        print(f"   ➤ Certificate Expiry: {expiry_date} (in {days_left} days)")
+
+        # Warn if expiry is close
+        if isinstance(days_left, int) and days_left < 30:
+            print("⚠️  Certificate is expiring soon!")
+
